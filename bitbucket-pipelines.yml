@@ -1,0 +1,38 @@
+version: 2.0
+
+pipelines:
+  default:
+    - step:
+        name: Trigger AWS CodeBuild (ARM64)
+        image: amazon/aws-cli:latest
+        script:
+          - source .env
+          - echo "🚀 Triggering CodeBuild project '$CODEBUILD_PROJECT_NAME' for ARM64 build..."
+          - |
+            BUILD_ID=$(aws codebuild start-build \
+              --project-name "$CODEBUILD_PROJECT_NAME" \
+              --source-type-override NO_SOURCE \
+              --buildspec-override "$(cat buildspec.yml)" \
+              --environment-variables-override \
+                "name=ECR_REPO_URI,value=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}" \
+                "name=AWS_ACCOUNT_ID,value=${AWS_ACCOUNT_ID}" \
+                "name=AWS_REGION,value=${AWS_REGION}" \
+              --query 'build.id' --output text \
+              --region "$AWS_REGION")
+          - echo "⏳ Build started: $BUILD_ID"
+          - |
+            # Poll until complete
+            while true; do
+              STATUS=$(aws codebuild batch-get-builds --ids "$BUILD_ID" \
+                --query 'builds[0].buildStatus' --output text --region "$AWS_REGION")
+              echo "   Status: $STATUS"
+              if [ "$STATUS" = "SUCCEEDED" ]; then
+                echo "✅ ARM64 image built and pushed to ECR!"
+                break
+              elif [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "FAULT" ] || [ "$STATUS" = "STOPPED" ]; then
+                echo "❌ Build failed with status: $STATUS"
+                exit 1
+              fi
+              sleep 10
+            done
+          - echo "🎉 Pipeline complete — ARM64 image available at ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}:latest"

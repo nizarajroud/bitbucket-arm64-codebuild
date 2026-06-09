@@ -1,0 +1,23 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to ECR..."
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+  build:
+    commands:
+      - echo "Building ARM64 image..."
+      - echo "FROM public.ecr.aws/docker/library/python:3.12-slim" > Dockerfile
+      - echo "LABEL architecture=arm64" >> Dockerfile
+      - echo "WORKDIR /app" >> Dockerfile
+      - echo "RUN echo 'import platform; print(f\"Hello ARM64 - {platform.machine()}\")' > app.py" >> Dockerfile
+      - echo "CMD [\"python3\", \"app.py\"]" >> Dockerfile
+      - docker build -t ${ECR_REPO_URI}:latest .
+      - docker build -t ${ECR_REPO_URI}:${CODEBUILD_BUILD_NUMBER} .
+  post_build:
+    commands:
+      - echo "Pushing to ECR..."
+      - docker push ${ECR_REPO_URI}:latest
+      - docker push ${ECR_REPO_URI}:${CODEBUILD_BUILD_NUMBER}
+      - echo "Done - ARM64 image pushed"
