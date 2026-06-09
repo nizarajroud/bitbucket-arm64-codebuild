@@ -25,13 +25,23 @@ The Bitbucket pipeline acts as an **orchestrator only** — it doesn't build any
 
 ![Infrastructure Diagram](docs/infra.svg)
 
-All infrastructure is managed with **Terraform** (`infra/codebuild.tf`):
+All infrastructure is managed with **Terraform** (`infra/`):
 
 | Resource | Purpose |
 |----------|---------|
 | **ECR Repository** (`arm64-demo`) | Stores the built ARM64 Docker images |
 | **CodeBuild Project** (`arm64-image-builder`) | Runs builds on `ARM_CONTAINER` (Graviton) |
-| **IAM Role + Policy** | Grants CodeBuild access to ECR push + CloudWatch logs |
+| **IAM Role + Policy** (CodeBuild) | Grants CodeBuild access to ECR push + CloudWatch logs |
+| **OIDC Provider** (Bitbucket) | Enables keyless auth from Bitbucket Pipelines |
+| **IAM Role** (Bitbucket) | Allows Bitbucket to trigger CodeBuild via OIDC |
+| **OIDC Provider** (GitHub) | Enables keyless auth from GitHub Actions |
+| **IAM Role** (GitHub Actions) | Allows GitHub Actions to run Terraform deployments |
+
+### Authentication
+
+Both CI/CD platforms use **OIDC federation** — no static AWS access keys stored anywhere:
+- **Bitbucket** → assumes `bitbucket-arm64-codebuild-role` to trigger CodeBuild
+- **GitHub Actions** → assumes `github-arm64-codebuild-deploy-role` to deploy Terraform
 
 ### CodeBuild Configuration
 
@@ -40,23 +50,41 @@ All infrastructure is managed with **Terraform** (`infra/codebuild.tf`):
 - **Type**: `ARM_CONTAINER` → runs on Graviton instances
 - **Privileged mode**: enabled (required for `docker build`)
 
+## CI/CD
+
+### GitHub Actions (Infrastructure)
+
+The workflow `.github/workflows/deploy.yml` automatically deploys Terraform changes:
+- **Trigger**: push to `main` (files in `infra/`) or manual dispatch
+- **Auth**: GitHub OIDC → AWS IAM Role (no secrets needed beyond role ARN)
+
+### Bitbucket Pipelines (ARM64 Build)
+
+The custom pipeline `arm64-build-poc` in the target repo:
+- **Trigger**: manual (Run pipeline → select `arm64-build-poc`)
+- **Auth**: Bitbucket OIDC → AWS IAM Role
+
 ## File Structure
 
 ```
 .
-├── README.md                  # This file
-├── .env                       # Environment variables (account ID, region)
-├── .gitignore                 # Excludes .env, Terraform state & cache
-├── Dockerfile                 # ARM64 Python demo image
-├── app.py                     # Simple hello world app
-├── bitbucket-pipelines.yml    # Orchestrator: trigger CodeBuild + poll
-├── buildspec.yml              # CodeBuild instructions: build + push ECR
+├── .github/
+│   └── workflows/
+│       └── deploy.yml             # GitHub Actions: Terraform deploy
+├── Dockerfile                     # ARM64 Python demo image
+├── README.md                      # This file
+├── app.py                         # Simple hello world app
+├── bitbucket-pipelines.yml        # Orchestrator: trigger CodeBuild + poll
+├── buildspec.yml                  # CodeBuild instructions: build + push ECR
 ├── docs/
-│   ├── architecture.svg       # Pipeline flow diagram
-│   └── infra.svg              # Infrastructure diagram
+│   ├── architecture.svg           # Pipeline flow diagram
+│   └── infra.svg                  # Infrastructure diagram
 └── infra/
-    ├── codebuild.tf           # Terraform: ECR + CodeBuild + IAM
-    └── terraform.tfvars       # Variables (account ID)
+    ├── codebuild.tf               # Terraform: ECR + CodeBuild + IAM
+    ├── oidc.tf                    # Terraform: Bitbucket OIDC + IAM Role
+    ├── github-oidc.tf             # Terraform: GitHub OIDC + IAM Role
+    ├── terraform.tfvars.example   # Template for required variables
+    └── terraform.tfvars           # (gitignored) actual values
 ```
 
 ## Quick Start
@@ -64,46 +92,28 @@ All infrastructure is managed with **Terraform** (`infra/codebuild.tf`):
 ### 1. Configure
 
 ```bash
-cp .env.example .env
-# Edit with your AWS account ID and region
-vi .env
-vi infra/terraform.tfvars
+cd infra
+cp terraform.tfvars.example terraform.tfvars
+# Edit with your values
+vi terraform.tfvars
 ```
 
 ### 2. Deploy Infrastructure
 
 ```bash
-cd infra
 terraform init
-terraform apply -auto-approve
+terraform apply
 ```
 
-### 3. Configure Bitbucket
+Or push to `main` — GitHub Actions deploys automatically.
 
-In **Repository Settings → Pipelines → Environment Variables**, add:
+### 3. Configure Bitbucket Pipeline
 
-| Variable | Value |
-|----------|-------|
-| `AWS_ACCESS_KEY_ID` | IAM user with `codebuild:StartBuild` + `codebuild:BatchGetBuilds` |
-| `AWS_SECRET_ACCESS_KEY` | Corresponding secret key |
-| `AWS_DEFAULT_REGION` | e.g. `ca-central-1` |
+In your target repo's `bitbucket-pipelines.yml`, add a custom pipeline step with `oidc: true` that triggers the CodeBuild project. Set the repository variable `AWS_ARM64_ROLE_ARN` to the Bitbucket role ARN output by Terraform.
 
 ### 4. Run
 
-```bash
-git push  # Pipeline triggers automatically
-```
-
-## Result
-
-ARM64 image available in ECR:
-
-```bash
-# Pull and verify
-docker pull <account>.dkr.ecr.<region>.amazonaws.com/arm64-demo:latest
-docker inspect <image> | grep Architecture
-# → "Architecture": "arm64"
-```
+Trigger the custom pipeline manually from Bitbucket, or push to a branch that runs it automatically.
 
 ## Why This Approach?
 
