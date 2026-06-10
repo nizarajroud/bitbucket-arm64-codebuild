@@ -6,7 +6,7 @@ Bitbucket Pipelines **does not offer ARM64 runners**. Building ARM64 Docker imag
 
 ## Architecture
 
-![Pipeline Architecture](docs/architecture.svg)
+![Pipeline Architecture](docs/architecture.png)
 
 ### How It Works
 
@@ -23,7 +23,7 @@ The Bitbucket pipeline acts as an **orchestrator only** — it doesn't build any
 
 ## Infrastructure
 
-![Infrastructure Diagram](docs/infra.svg)
+![Infrastructure Diagram](docs/infra.png)
 
 All infrastructure is managed with **Terraform** (`infra/`):
 
